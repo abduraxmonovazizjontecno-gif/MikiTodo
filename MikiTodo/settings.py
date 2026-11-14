@@ -41,7 +41,6 @@ if not DEBUG:
     SECURE_HSTS_PRELOAD = getenv("SECURE_HSTS_PRELOAD", "False").lower() == "true"
     SECURE_CONTENT_TYPE_NOSNIFF = True
 
-# CSRF Trusted Origins
 CSRF_TRUSTED_ORIGINS = [
     o.strip() for o in getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()
 ]
@@ -168,7 +167,7 @@ REST_FRAMEWORK = {
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": (
-        "rest_framework.permissions.IsAuthenticated",
+        "rest_framework.permissions.AllowAny",
     ),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_THROTTLE_RATES": {
@@ -176,7 +175,6 @@ REST_FRAMEWORK = {
         "otp_send_ip": "20/hour",
         "otp_verify": "10/min",
         "google_login": "20/min",
-        # Qo'shimcha: soatlik telefon limiti (taxminan 60 SMS/soat max)
         "otp_send_phone_hour": "30/hour",
     },
 }
@@ -201,8 +199,7 @@ SPECTACULAR_SETTINGS = {
     "SERVE_INCLUDE_SCHEMA": False,
 }
 
-OPENAI_API_KEY = getenv("OPENAI_API_KEY", "")
-GROQ_API_KEY = getenv("GROQ_API_KEY", "")
+
 
 REDIS_URL = getenv("REDIS_URL", "")
 if REDIS_URL:

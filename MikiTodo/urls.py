@@ -1,19 +1,15 @@
 from django.conf import settings
 from django.conf.urls.static import static
-from django.contrib import admin
 from django.urls import include, path
 
-from apps.views import HealthApiView
 from drf_spectacular.views import (
     SpectacularAPIView,
     SpectacularSwaggerView,
 )
 
 urlpatterns = [
-    path("health/", HealthApiView.as_view(), name="health"),
-    path(settings.ADMIN_URL, admin.site.urls),
 
-    # Main API
+
     path("api/v1/", include("apps.urls")),
 
 ]

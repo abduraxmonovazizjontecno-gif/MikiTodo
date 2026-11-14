@@ -41,19 +41,12 @@ class CustomUserManager(UserManager):
 
 
 class User(AbstractUser):
-    """
-    Asosiy foydalanuvchi.
-    Kirish: telefon raqami + OTP (yoki JWT).
-    """
     username = None
     first_name = models.CharField(max_length=150, blank=True, default="")
     last_name = models.CharField(max_length=150, blank=True, default="")
     nickname = models.CharField(max_length=50, unique=True, null=True, blank=True)
-    # Google orqali kirgan foydalanuvchida telefon bo'lmaydi (null); OTP orqali kirganda har doim bor.
     phone_number = models.CharField(max_length=20, unique=True, null=True, blank=True)
-    google_sub = models.CharField(max_length=64, unique=True, null=True, blank=True, editable=False)
     avatar = models.ImageField(upload_to="avatars/", null=True, blank=True)
-    # Frontend til sozlamasi (UZ / RU / EN)
     language = models.CharField(
         max_length=5,
         choices=[("uz", "O'zbekcha"), ("ru", "Русский"), ("en", "English")],
@@ -83,10 +76,6 @@ class User(AbstractUser):
 
 
 class OTP(models.Model):
-    """
-    Telefon orqali kirish uchun bir martalik kod.
-    Kod ochiq holda saqlanmaydi: HMAC-SHA256 (SECRET_KEY bilan) hash saqlanadi.
-    """
     MAX_ATTEMPTS = 5
     LIFETIME_MINUTES = 5
 
@@ -106,7 +95,7 @@ class OTP(models.Model):
         return timezone.now() < self.created_at + timedelta(minutes=minutes)
 
     def matches(self, raw_code: str) -> bool:
-        from .utils import hash_otp  # circular importdan qochish
+        from .utils import hash_otp
         return hmac.compare_digest(self.code, hash_otp(self.phone_number, raw_code))
 
     def __str__(self):
@@ -114,10 +103,6 @@ class OTP(models.Model):
 
 
 class Workspace(models.Model):
-    """
-    Ishchi maydon (Workspace).
-    Lider yaratadi.
-    """
     name = models.CharField(max_length=255)
     owner = models.ForeignKey(
         User, on_delete=models.CASCADE, related_name="owned_workspaces"
@@ -133,7 +118,6 @@ class Workspace(models.Model):
 
 
 class Project(models.Model):
-    """Loyiha. Workspace ichida bo'ladi."""
     workspace = models.ForeignKey(
         Workspace, on_delete=models.CASCADE, related_name="projects"
     )
@@ -161,7 +145,6 @@ class Project(models.Model):
 
 
 class ProjectMember(models.Model):
-    """Loyiha a'zolari va rollari."""
     ROLE_LEADER = "leader"
     ROLE_MEMBER = "member"
     ROLE_CHOICES = [
@@ -197,12 +180,6 @@ class ProjectMember(models.Model):
 
 
 class Contact(models.Model):
-    """
-    Mutual kontakt (do'stlik).
-    Ikkala tomon uchun alohida yozuv yaratiladi:
-      Contact(user=A, contact_user=B)
-      Contact(user=B, contact_user=A)
-    """
     user = models.ForeignKey(
         User, on_delete=models.CASCADE, related_name="contacts"
     )
@@ -229,10 +206,6 @@ class Contact(models.Model):
 
 
 class ContactRequest(models.Model):
-    """
-    Zapros (kontakt so'rovi). 12 soat amal qiladi.
-    Accept qilinsa → mutual Contact + (ixtiyoriy) ProjectMember.
-    """
     STATUS_PENDING = "pending"
     STATUS_ACCEPTED = "accepted"
     STATUS_REJECTED = "rejected"
@@ -275,7 +248,6 @@ class ContactRequest(models.Model):
             models.Index(fields=["from_user", "status"]),
             models.Index(fields=["expires_at"]),
         ]
-        # Note: full unique on (from,to,pending) is hard with status; app-level + lock protects races
         ordering = ["-created_at"]
 
     def save(self, *args, **kwargs):
@@ -296,10 +268,6 @@ class ContactRequest(models.Model):
 
 
 class Task(models.Model):
-    """
-    Vazifa.
-    Status: To Do → In Progress → Done
-    """
     STATUS_TODO = "todo"
     STATUS_IN_PROGRESS = "in_progress"
     STATUS_DONE = "done"
@@ -322,7 +290,7 @@ class Task(models.Model):
         Project, on_delete=models.CASCADE, related_name="tasks"
     )
     title = models.CharField(max_length=500)
-    description = models.TextField(blank=True, default="")  # STT dan kelgan matn ham shu yerda
+    description = models.TextField(blank=True, default="")
     status = models.CharField(
         max_length=20, choices=STATUS_CHOICES, default=STATUS_TODO, db_index=True
     )
@@ -343,7 +311,6 @@ class Task(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     completed_at = models.DateTimeField(null=True, blank=True)
-    # Deadline eslatmasi yuborilgan vaqt (deadline o'zgarsa None ga qaytariladi)
     deadline_reminded_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
@@ -364,9 +331,6 @@ class Task(models.Model):
 
 
 class Device(models.Model):
-    """
-    FCM push-notification uchun qurilma tokeni.
-    """
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="devices")
     fcm_token = models.CharField(max_length=512, unique=True)
     device_name = models.CharField(max_length=100, blank=True, default="")
@@ -380,8 +344,6 @@ class Device(models.Model):
         return f"{self.user} — {self.fcm_token[:20]}..."
 
 class ChatMessage(models.Model):
-    """1:1 chat — faqat o'zaro Contact bo'lgan userlar orasida."""
-
     sender = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,

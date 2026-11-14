@@ -9,12 +9,11 @@ import requests
 from django.conf import settings
 from rest_framework.serializers import ValidationError
 
-# E.164'ga yaqin: ixtiyoriy '+' va 9-15 ta raqam
 logger = logging.getLogger(__name__)
 
 PHONE_REGEX = re.compile(r"^\+?\d{9,15}$")
 
-# Nickname: faqat lotin harf/raqam/'_' , 3-20 belgi
+
 NICKNAME_REGEX = re.compile(r"^[a-zA-Z0-9_]{3,20}$")
 
 
@@ -34,19 +33,12 @@ def generate_otp_code(length: int = 6) -> str:
 
 
 def hash_otp(phone_number: str, code: str) -> str:
-    """OTP ni telefon raqami bilan bog'lab HMAC-SHA256 qiladi (DB sizib chiqsa ham kod ochilmaydi)."""
     key = settings.SECRET_KEY.encode()
     msg = f"{phone_number}:{code}".encode()
     return hmac.new(key, msg, hashlib.sha256).hexdigest()
 
 
 def send_sms(phone_number: str, message: str) -> bool:
-    """
-    SMS yuborish.
-    Production: SMS_PROVIDER=eskiz + ESKIZ_TOKEN
-    Development (DEBUG=True): konsolga chiqaradi.
-    Production'da provider sozlanmagan bo'lsa False qaytaradi (jim "muvaffaqiyat" YO'Q).
-    """
     provider = os.getenv("SMS_PROVIDER", "").lower()
     if provider == "eskiz":
         return _send_via_eskiz(phone_number, message)

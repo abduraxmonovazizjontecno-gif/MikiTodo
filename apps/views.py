@@ -3,7 +3,6 @@ import os
 from django.db import IntegrityError, connection, models, transaction
 from django.db.models import Count, Q
 from django.utils import timezone
-from openai import OpenAI
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -23,15 +22,14 @@ from .serializers import (
     UserPublicSerializer, ContactSerializer, ContactRequestSerializer,
     SendContactRequestSerializer, AddProjectMemberSerializer,
     TaskSerializer, TaskCreateSerializer, TaskStatusUpdateSerializer,
-    TaskUpdateSerializer, DeviceSerializer, GoogleLoginSerializer, get_tokens_for_user,
+    TaskUpdateSerializer, DeviceSerializer, get_tokens_for_user,
 )
 from . import notifications
-from .google_auth import GoogleAuthError, GoogleNotConfigured, verify_google_id_token
 from .permissions import (
     IsProjectLeader, IsTaskAssigneeOrLeader, enforce, is_leader, is_member,
 )
 from .throttles import (
-    GoogleLoginThrottle, OTPSendIPThrottle, OTPSendPhoneThrottle, OTPVerifyThrottle,
+     OTPSendIPThrottle, OTPSendPhoneThrottle, OTPVerifyThrottle,
 )
 from .utils import generate_otp_code, hash_otp, send_sms
 
@@ -49,7 +47,6 @@ class SendOTPApiView(APIView):
 
         code = generate_otp_code()
         with transaction.atomic():
-            # Eski OTP larni bekor qilish
             OTP.objects.filter(phone_number=phone, is_used=False).update(is_used=True)
             OTP.objects.create(phone_number=phone, code=hash_otp(phone, code))
 
@@ -77,7 +74,6 @@ class VerifyOTPApiView(APIView):
         code = data["code"]
 
         with transaction.atomic():
-            # Eng oxirgi faol OTP; qatorni qulflaymiz — parallel urinishlar attempts'ni chetlab o'tolmaydi.
             otp = (
                 OTP.objects.select_for_update()
                 .filter(phone_number=phone, is_used=False)
@@ -96,8 +92,6 @@ class VerifyOTPApiView(APIView):
 
             user, created = User.objects.get_or_create(phone_number=phone)
 
-            # Yangi foydalanuvchi uchun qo'shimcha ma'lumotlar.
-            # Nickname band bo'lsa OTP sarflanmaydi — foydalanuvchi boshqa nickname bilan qayta urinadi.
             if created or not user.nickname:
                 nickname = data.get("nickname")
                 if nickname:
@@ -128,61 +122,6 @@ class VerifyOTPApiView(APIView):
             {
                 "user": ProfileSerializer(user).data,
                 "tokens": tokens,
-                "is_new_user": created,
-            }
-        )
-
-
-class GoogleLoginApiView(APIView):
-    """
-    POST /auth/google/  {"id_token": "..."}
-    Javob verify-otp bilan bir xil: {"user", "tokens", "is_new_user"}.
-    Foydalanuvchi Google `sub` bo'yicha topiladi (email o'zgarsa ham bir xil akkaunt).
-    Mavjud OTP-akkauntlar avtomatik BIRLASHTIRILMAYDI (email egaligi telefon egaligini isbotlamaydi).
-    """
-    permission_classes = [AllowAny]
-    throttle_classes = [GoogleLoginThrottle]
-
-    def post(self, request):
-        serializer = GoogleLoginSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        try:
-            info = verify_google_id_token(serializer.validated_data["id_token"])
-        except GoogleNotConfigured:
-            return Response(
-                {"detail": "Google orqali kirish serverda sozlanmagan."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-        except GoogleAuthError:
-            return Response(
-                {"detail": "Google token yaroqsiz."}, status=status.HTTP_401_UNAUTHORIZED
-            )
-
-        sub = info["sub"]
-        created = False
-        try:
-            with transaction.atomic():
-                user = User.objects.filter(google_sub=sub).first()
-                if user is None:
-                    user = User(
-                        google_sub=sub,
-                        email=info.get("email", ""),
-                        first_name=(info.get("given_name") or "")[:150],
-                        last_name=(info.get("family_name") or "")[:150],
-                    )
-                    user.set_unusable_password()
-                    user.save()
-                    created = True
-        except IntegrityError:  # parallel birinchi kirish — boshqa so'rov yaratib bo'ldi
-            user = User.objects.get(google_sub=sub)
-
-        if not user.is_active:
-            return Response(status=status.HTTP_403_FORBIDDEN)
-
-        return Response(
-            {
-                "user": ProfileSerializer(user).data,
-                "tokens": get_tokens_for_user(user),
                 "is_new_user": created,
             }
         )
@@ -221,7 +160,6 @@ class WorkspaceApiView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        """Foydalanuvchi egasi bo'lgan yoki a'zo bo'lgan workspacelar."""
         owned = Workspace.objects.filter(owner=request.user)
         member_ws_ids = ProjectMember.objects.filter(
             user=request.user
@@ -233,7 +171,6 @@ class WorkspaceApiView(APIView):
         return Response(WorkspaceSerializer(qs, many=True).data)
 
     def post(self, request):
-        """Yangi Workspace yaratish (Lider)."""
         raw_name = request.data.get("name")
         name = (raw_name or "").strip() if isinstance(raw_name, str) else ""
         if not name:
@@ -273,7 +210,6 @@ class ProjectApiView(APIView):
                 ProjectSerializer(project, context={"request": request}).data
             )
 
-        # Barcha ochiq loyihalar (egasi yoki a'zo) + N+1 kamaytirish
         owned = Project.objects.filter(owner=request.user)
         member = Project.objects.filter(members__user=request.user)
         qs = (
@@ -287,7 +223,6 @@ class ProjectApiView(APIView):
         )
 
     def post(self, request):
-        """Yangi Project yaratish + avtomatik Leader qilib qo'shish."""
         serializer = ProjectCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
@@ -373,10 +308,6 @@ class ProjectMembersApiView(APIView):
 
 
 class ProjectDashboardApiView(APIView):
-    """
-    Lider uchun progress monitoring (TZ 3.3). Faqat lider ko'radi.
-    A'zolar bo'yicha statistika bitta agregatsiya so'rovida (N+1 yo'q).
-    """
     permission_classes = [IsAuthenticated]
 
     def get(self, request, project_id):
@@ -431,25 +362,18 @@ class ProjectDashboardApiView(APIView):
         )
 
 
-
 # Contacts
 
 def are_contacts(user_a, user_b) -> bool:
-    """Ikkala foydalanuvchi bir-birining kontaktidami?"""
     return Contact.objects.filter(user=user_a, contact_user=user_b).exists()
 
 
 def make_mutual_contacts(user_a, user_b):
-    """Ikkala tomon uchun Contact yozuvini yaratadi (agar yo'q bo'lsa)."""
     Contact.objects.get_or_create(user=user_a, contact_user=user_b)
     Contact.objects.get_or_create(user=user_b, contact_user=user_a)
 
 
 class UserSearchApiView(APIView):
-    """
-    GET /api/v1/users/search/?q=nickname
-    Nickname bo'yicha qidirish (o'zini chiqarib tashlaydi).
-    """
     permission_classes = [IsAuthenticated]
     throttle_classes = [OTPVerifyThrottle]
 
@@ -482,7 +406,6 @@ class UserSearchApiView(APIView):
 
 
 class ContactListApiView(APIView):
-    """GET /api/v1/contacts/ — mening kontaktlarim."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -495,14 +418,9 @@ class ContactListApiView(APIView):
 
 
 class ContactRequestApiView(APIView):
-    """
-    POST /api/v1/contacts/request/  — zapros yuborish
-    GET  /api/v1/contacts/requests/ — menga kelgan zaproslar
-    """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        # Muddati o'tganlarni avtomatik expired qilish
         ContactRequest.objects.filter(
             to_user=request.user,
             status=ContactRequest.STATUS_PENDING,
@@ -544,7 +462,6 @@ class ContactRequestApiView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Bir tomonlama yoki teskari pending so'rovni ham bloklaymiz
         existing = ContactRequest.objects.filter(
             status=ContactRequest.STATUS_PENDING,
             expires_at__gt=timezone.now(),
@@ -571,12 +488,10 @@ class ContactRequestApiView(APIView):
                     {"detail": "Faqat loyiha lideri a'zo qo'sha oladi."},
                     status=status.HTTP_403_FORBIDDEN,
                 )
-
         with transaction.atomic():
-            # Race: parallel so'rovlar
             if ContactRequest.objects.filter(
-                status=ContactRequest.STATUS_PENDING,
-                expires_at__gt=timezone.now(),
+                    status=ContactRequest.STATUS_PENDING,
+                    expires_at__gt=timezone.now(),
             ).filter(
                 models.Q(from_user=request.user, to_user=to_user)
                 | models.Q(from_user=to_user, to_user=request.user)
@@ -598,10 +513,6 @@ class ContactRequestApiView(APIView):
 
 
 class ContactRequestRespondApiView(APIView):
-    """
-    POST /api/v1/contacts/requests/<id>/accept/
-    POST /api/v1/contacts/requests/<id>/reject/
-    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk, action):
@@ -641,7 +552,6 @@ class ContactRequestRespondApiView(APIView):
                 return Response({"detail": "Zapros rad etildi."})
 
             if action == "accept":
-                # from_user hali leader ekanligini qayta tekshirish (project bo'lsa)
                 if req.project_id:
                     if not is_leader(req.from_user, req.project):
                         return Response(
@@ -659,8 +569,6 @@ class ContactRequestRespondApiView(APIView):
                 req.status = ContactRequest.STATUS_ACCEPTED
                 req.responded_at = now
                 req.save(update_fields=["status", "responded_at"])
-
-                # notification outside lock is better, but keep simple
                 if req.project_id:
                     notifications.member_joined(req.project, req.to_user, req.from_user)
                 notifications.contact_request_accepted(req)
@@ -678,11 +586,6 @@ class ContactRequestRespondApiView(APIView):
 
 
 class ProjectAddMemberApiView(APIView):
-    """
-    POST /api/v1/projects/<project_id>/members/add/
-    Faqat ALLAQACHON kontaktidagi odamni loyihaga qo'shadi.
-    Body: {"user_id": 123}
-    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request, project_id):
@@ -737,7 +640,6 @@ class ProjectAddMemberApiView(APIView):
 #  Tasks 
 
 def _resolve_assignee(project, assignee_id):
-    """assignee_id -> User yoki None. Loyiha a'zosi bo'lmasa 400."""
     if assignee_id is None:
         return None
     user = User.objects.filter(pk=assignee_id).first()
@@ -800,7 +702,6 @@ class TaskApiView(APIView):
 
         assignee_id = data.get("assignee_id")
         if not is_leader(request.user, project):
-            # A'zo faqat o'ziga vazifa yaratadi (masalan, ovozli zametka)
             if assignee_id not in (None, request.user.id):
                 return Response(
                     {"detail": "Boshqalarga vazifa biriktirish faqat lider uchun."},
@@ -849,7 +750,7 @@ class TaskApiView(APIView):
                 if field in data:
                     setattr(task, field, data[field])
             if "deadline" in data:
-                task.deadline_reminded_at = None  
+                task.deadline_reminded_at = None
             if "status" in data:
                 _apply_status(task, data["status"])
             if "assignee_id" in data:
@@ -904,8 +805,6 @@ class TaskStatusApiView(APIView):
         return Response(TaskSerializer(task).data)
 
 
-
-
 class DeviceApiView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -938,12 +837,7 @@ class DeviceApiView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-
 class SpeechTranscribeApiView(APIView):
-    """
-    Audio -> matn (Whisper).
-    Himoya: max 10 MB, throttle, timeout, xato matni yashiriladi.
-    """
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
     throttle_classes = [OTPVerifyThrottle]  # reuse existing IP throttle roughly 10/min
@@ -981,19 +875,18 @@ class SpeechTranscribeApiView(APIView):
                 "model": "whisper-1",
                 "file": audio,
             }
-            # uz uchun language bermaymiz (audit)
             if whisper_lang != "uz":
                 kwargs["language"] = whisper_lang
             transcription = client.audio.transcriptions.create(**kwargs)
             return Response({"text": transcription.text, "language": language})
         except Exception:
-            # Xato matnini klientga bermaymiz (kalit/prefix oshkor bo'lmasin)
             import logging
             logging.getLogger(__name__).exception("Speech transcription failed")
             return Response(
                 {"detail": "Transkripsiya muvaffaqiyatsiz. Qayta urinib ko'ring."},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
+
 
 class HealthApiView(APIView):
     permission_classes = [AllowAny]

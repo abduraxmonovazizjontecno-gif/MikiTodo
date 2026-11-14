@@ -48,7 +48,6 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        # Android org.json: JSON null -> optString "null" bo'lib qolmasligi uchun bo'sh satr
         for key in ("phone_number", "nickname"):
             if data.get(key) is None:
                 data[key] = ""
@@ -66,19 +65,18 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
                 "Nickname faqat lotin harf, raqam va _ dan iborat bo'lishi kerak (3-20 belgi)."
             )
         if not value:
-            return None  # bo'sh satr emas NULL saqlanadi (unique cheklov to'qnashmasligi uchun)
+            return None
         user = self.context["request"].user
         if User.objects.filter(nickname__iexact=value).exclude(pk=user.pk).exists():
             raise serializers.ValidationError("Bu nickname band.")
         return value
 
     def validate_avatar(self, value):
-        if value and value.size > 2 * 1024 * 1024:  # 2 MB
+        if value and value.size > 2 * 1024 * 1024:
             raise serializers.ValidationError("Avatar 2 MB dan katta bo'lmasligi kerak.")
         return value
 
     def update(self, instance, validated_data):
-        # Eski avatar faylini o'chirish
         new_avatar = validated_data.get("avatar")
         if new_avatar and instance.avatar:
             old = instance.avatar
@@ -90,8 +88,7 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 
-class GoogleLoginSerializer(serializers.Serializer):
-    id_token = serializers.CharField(max_length=4096, trim_whitespace=True)
+
 
 
 class NicknameCheckSerializer(serializers.Serializer):
@@ -105,10 +102,9 @@ class NicknameCheckSerializer(serializers.Serializer):
         return value
 
 
-# Workspace / Project
+
 
 class UserPublicSerializer(serializers.ModelSerializer):
-    """Qidiruv va kontakt ro'yxati uchun qisqa user ma'lumoti."""
     full_name = serializers.CharField(read_only=True)
 
     class Meta:
@@ -214,7 +210,6 @@ class SendContactRequestSerializer(serializers.Serializer):
 
 
 class AddProjectMemberSerializer(serializers.Serializer):
-    """Faqat kontaktidagi odamni loyihaga qo'shish."""
     user_id = serializers.IntegerField()
 
 
@@ -260,7 +255,6 @@ class TaskCreateSerializer(serializers.Serializer):
 
 
 class TaskUpdateSerializer(serializers.Serializer):
-    """PATCH /tasks/<id>/ — maydonlar ixtiyoriy (partial), lekin qiymatlari validatsiya qilinadi."""
     title = serializers.CharField(max_length=500)
     description = serializers.CharField(allow_blank=True)
     status = serializers.ChoiceField(choices=Task.STATUS_CHOICES)
@@ -285,7 +279,6 @@ class DeviceSerializer(serializers.ModelSerializer):
 # Speech-to-Text
 
 class SpeechTranscribeSerializer(serializers.Serializer):
-    # audio fayl request.FILES orqali keladi
     language = serializers.ChoiceField(
         choices=["uz", "ru", "en"], required=False, default="uz"
     )

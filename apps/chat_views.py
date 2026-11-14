@@ -1,4 +1,3 @@
-"""REST: chat tarixi va dialoglar ro'yxati."""
 from django.contrib.auth import get_user_model
 from django.db.models import Q, Max, OuterRef, Subquery
 from rest_framework import status
@@ -14,7 +13,6 @@ User = get_user_model()
 
 
 class ChatThreadApiView(APIView):
-    """GET /api/v1/chat/messages/?with=<user_id>&limit=50&before_id="""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -52,8 +50,6 @@ class ChatThreadApiView(APIView):
 
         msgs = list(qs.order_by("-created_at")[:limit])
         msgs.reverse()
-
-        # o'qilgan deb belgilash
         ChatMessage.objects.filter(
             sender_id=other_id, recipient=request.user, is_read=False
         ).update(is_read=True)
@@ -62,12 +58,10 @@ class ChatThreadApiView(APIView):
 
 
 class ChatDialogsApiView(APIView):
-    """GET /api/v1/chat/dialogs/ — oxirgi xabar bilan kontaktlar."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         uid = request.user.id
-        # barcha kontaktlar
         contacts = Contact.objects.filter(user_id=uid).select_related("contact_user")
         other_ids = [c.contact_user_id for c in contacts]
 
@@ -96,7 +90,6 @@ class ChatDialogsApiView(APIView):
                 "last_message": serialize_message(last) if last else None,
                 "unread_count": unread,
             })
-        # oxirgi xabar vaqti bo'yicha
         result.sort(
             key=lambda x: x["last_message"]["created_at"] if x["last_message"] else "",
             reverse=True,

@@ -1,18 +1,3 @@
-"""
-FCM push-notificationlar (TZ: Firebase Cloud Messaging).
-
-- DATA-only xabarlar yuboriladi (Android FirebaseService.onMessageReceived har doim ishlashi uchun):
-  type, title, body, task_id, project_id  (hammasi str).
-- Matn foydalanuvchi tiliga (User.language: uz/ru/en) qarab render qilinadi.
-- Yuborish so'rov tranzaksiyasi COMMIT bo'lgach va alohida threadda bajariladi —
-  API javobi FCM'ni kutmaydi, rollback bo'lsa push ham ketmaydi.
-- Yaroqsiz (o'chirilgan) tokenlar avtomatik Device jadvalidan o'chiriladi.
-
-Sozlash (bittasi yetarli):
-    FIREBASE_CREDENTIALS_FILE=/run/secrets/firebase.json
-    FIREBASE_CREDENTIALS_JSON='{"type":"service_account", ...}'
-Sozlanmagan bo'lsa push jimgina o'tkazib yuboriladi (log'da ogohlantirish bilan).
-"""
 import json
 import logging
 import os
@@ -28,14 +13,12 @@ from .models import Device, ProjectMember, User
 
 logger = logging.getLogger(__name__)
 
-# Android FirebaseTools.DelegatedTask bilan bir xil qiymat
 TYPE_TASK_ASSIGNED = "Delegated-task"
 TYPE_TASK_DONE = "Task-done"
 TYPE_DEADLINE = "Task-deadline"
 TYPE_MEMBER_JOINED = "Member-joined"
 TYPE_CONTACT_REQUEST = "Contact-request"
 TYPE_CONTACT_ACCEPTED = "Contact-accepted"
-# Android FirebaseTools.NewMessage bilan bir xil qiymat
 TYPE_NEW_MESSAGE = "New-message"
 
 TEXTS = {
@@ -97,7 +80,6 @@ _app_lock = threading.Lock()
 
 
 def _get_app():
-    """Firebase app'ni bir marta, lazy yaratadi. Sozlanmagan bo'lsa None."""
     global _app
     if _app is not None:
         return _app
@@ -120,17 +102,12 @@ def _get_app():
 
 
 def _send_multicast(tokens: list[str], data: dict) -> list[str]:
-    """Yuboradi; yaroqsiz tokenlar ro'yxatini qaytaradi. (Testlarda mock qilinadi.)"""
     app = _get_app()
     if app is None:
         logger.warning("FCM sozlanmagan (FIREBASE_CREDENTIALS_*) — push yuborilmadi.")
         return []
 
     from firebase_admin import messaging
-
-    # Diqqat: `tokens` firebase-admin 7.6+ da "deprecated" deb belgilangan, lekin `fids` (Installation ID)
-    # Android'dagi FirebaseMessaging.getToken() (registration token) bilan bir xil narsa EMAS.
-    # Klient registration token yuborayotgan ekan, `tokens` to'g'ri; shuning uchun versiya pin qilingan.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         message = messaging.MulticastMessage(
@@ -146,7 +123,7 @@ def _send_multicast(tokens: list[str], data: dict) -> list[str]:
             continue
         exc = result.exception
         if isinstance(exc, (messaging.UnregisteredError, messaging.SenderIdMismatchError)) or (
-            exc is not None and "registration token" in str(exc).lower()
+                exc is not None and "registration token" in str(exc).lower()
         ):
             dead.append(token)
         else:
@@ -164,15 +141,13 @@ def _deliver(user_id: int, data: dict) -> None:
         dead = _send_multicast(tokens, data)
         if dead:
             Device.objects.filter(fcm_token__in=dead).delete()
-    except Exception:  # push hech qachon API'ni yiqitmasin
+    except Exception:
         logger.exception("FCM yuborishda kutilmagan xato (user=%s)", user_id)
     finally:
         close_old_connections()
 
 
 def _queue(user_id: int, data: dict) -> None:
-    """Tranzaksiya commit bo'lgach push'ni navbatga qo'yadi (sync yoki threadpool)."""
-
     def _go():
         if getattr(settings, "FCM_SYNC", False):
             _deliver(user_id, data)
@@ -183,9 +158,6 @@ def _queue(user_id: int, data: dict) -> None:
 
 
 def notify(user: User, kind: str, *, task_obj=None, project_obj=None, extra_data=None, **ctx) -> None:
-    """
-    `user`ga push navbatga qo'yadi (commit'dan keyin). Matn user.language bo'yicha.
-    """
     title, body = render(kind, user.language or "uz", **ctx)
     data = {"type": kind, "title": title, "body": body}
     if task_obj is not None:
@@ -200,22 +172,17 @@ def notify(user: User, kind: str, *, task_obj=None, project_obj=None, extra_data
     _queue(user.id, data)
 
 
-# Voqealar
-
 def task_assigned(task, actor) -> None:
     if task.assignee_id and task.assignee_id != actor.id:
         notify(task.assignee, TYPE_TASK_ASSIGNED, task_obj=task, actor=display_name(actor), task=task.title)
 
 
 def task_done(task, actor) -> None:
-    """Ijrochi vazifani tugatsa — liderlarga (o'zidan boshqa) xabar."""
     for leader in project_leaders(task.project).exclude(pk=actor.id):
         notify(leader, TYPE_TASK_DONE, task_obj=task, actor=display_name(actor), task=task.title)
 
 
 def member_joined(project, new_member, inviter) -> None:
-    """Yangi a'zoga 'siz qo'shildingiz' push; liderga ham (agar boshqa bo'lsa)."""
-    # Asosiy: yangi a'zo bilishi kerak
     if inviter and inviter.id != new_member.id:
         notify(
             new_member,
@@ -224,7 +191,6 @@ def member_joined(project, new_member, inviter) -> None:
             actor=display_name(inviter),
             project=project.name,
         )
-        # Liderga ham (o'ziga o'zi emas)
         notify(
             inviter,
             TYPE_MEMBER_JOINED,
@@ -235,7 +201,6 @@ def member_joined(project, new_member, inviter) -> None:
 
 
 def contact_request_sent(req) -> None:
-    """Zapros yuborilganda qabul qiluvchiga push."""
     notify(
         req.to_user,
         TYPE_CONTACT_REQUEST,
@@ -246,14 +211,6 @@ def contact_request_sent(req) -> None:
 
 
 def chat_message(message, sender: User) -> None:
-    """
-    Yangi chat xabari — recipientga push.
-
-    Diqqat: matn shablon (`render`/`.format`) orqali EMAS, to'g'ridan-to'g'ri
-    yuboriladi — chat matni erkin foydalanuvchi matni, agar u '{'/'}' belgilarini
-    o'z ichiga olsa `.format(**ctx)` bilan ishlangan boshqa turlardek KeyError/
-    ValueError berib, push butunlay yuborilmay qolardi.
-    """
     body = (message.text or "").strip()
     if len(body) > 200:
         body = body[:200] + "…"
@@ -268,7 +225,6 @@ def chat_message(message, sender: User) -> None:
 
 
 def contact_request_accepted(req) -> None:
-    """Zapros qabul qilinganda yuboruvchiga push."""
     notify(
         req.from_user,
         TYPE_CONTACT_ACCEPTED,

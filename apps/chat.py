@@ -1,18 +1,4 @@
-"""
-WebSocket chat — faqat o'zaro Contact bo'lgan userlar.
 
-URL: ws://HOST/ws/chat/?token=<JWT_ACCESS>
-
-Client → server:
-  {"type": "chat.send", "to_user_id": 5, "text": "Salom"}
-  {"type": "chat.read", "with_user_id": 5}
-
-Server → client:
-  {"type": "chat.message", "id": 1, "from_user_id": 3, "to_user_id": 5,
-   "text": "Salom", "created_at": "...", "is_read": false}
-  {"type": "chat.error", "detail": "..."}
-  {"type": "chat.ack", "id": 1}
-"""
 from __future__ import annotations
 
 import json
@@ -38,7 +24,6 @@ def user_group(user_id: int) -> str:
 
 
 def are_contacts(a_id: int, b_id: int) -> bool:
-    """Ikkala tomon Contact jadvalida bor-yo'qligini tekshiradi (mutual)."""
     return Contact.objects.filter(user_id=a_id, contact_user_id=b_id).exists()
 
 
@@ -59,7 +44,6 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
 
     async def connect(self):
         token = self.scope.get("query_string", b"").decode()
-        # query: token=...
         jwt = ""
         for part in token.split("&"):
             if part.startswith("token="):
@@ -125,15 +109,11 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             text=text,
         )
         payload = serialize_message(msg)
-        # yuboruvchiga ack
         await self.send_json({**payload, "type": "chat.ack"})
-        # qabul qiluvchiga — real-time (agar ulangan bo'lsa)
         await self.channel_layer.group_send(
             user_group(to_id),
             {"type": "chat.relay", "payload": payload},
         )
-        # qabul qiluvchiga — FCM push (ulangan-ulanmaganidan qat'i nazar;
-        # klient ilova foreground bo'lsa system notification'ni o'zi bostiradi)
         await database_sync_to_async(notifications.chat_message)(msg, self.user)
 
     async def _handle_read(self, content):
@@ -147,7 +127,6 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             ).update(is_read=True)
         )()
         if updated:
-            # Yuboruvchiga o'qilganligi haqida xabar
             await self.channel_layer.group_send(
                 user_group(with_id),
                 {

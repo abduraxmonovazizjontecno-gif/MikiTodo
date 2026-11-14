@@ -1,12 +1,4 @@
-"""
-Rol asosidagi ruxsatlar (TZ 2-bo'lim).
 
-- Loyiha Lideri: loyiha egasi yoki ProjectMember(role=leader)
-- Jamoa A'zosi: ProjectMember(role=member)
-
-Non-member uchun view'lar 404 qaytaradi (loyiha mavjudligi oshkor bo'lmasin),
-a'zo bo'lib ruxsati yo'qlar uchun 403.
-"""
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import BasePermission
 
@@ -28,7 +20,6 @@ def is_leader(user, project: Project) -> bool:
 
 
 def is_member(user, project: Project) -> bool:
-    """Lider ham a'zo hisoblanadi."""
     if not user.is_authenticated:
         return False
     if project.owner_id == user.id:
@@ -60,7 +51,6 @@ class IsTaskAssigneeOrLeader(BasePermission):
 
 
 def enforce(permission_class, request, view, obj) -> None:
-    """Object-level permission'ni qo'lda tekshirib, 403 ko'taradi."""
     perm = permission_class()
     if not perm.has_object_permission(request, view, obj):
         raise PermissionDenied(getattr(perm, "message", None))
